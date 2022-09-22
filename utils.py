@@ -1,4 +1,4 @@
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 from django.conf import settings, ENVIRONMENT_VARIABLE
 
 import functools
@@ -99,6 +99,48 @@ def check_valid(value):
     """
     val = str(value).upper().strip()
     return False if val == 'NONE' or val == 'NULL' or val == 'UNDEFINED' else True
+
+
+def crc_calc(string_value: Optional[str]) -> Optional[str]:
+    """
+    Calculates the CRC representation of the given string value.
+
+    :param string_value: any string or None value.
+    :return: CRC string representation of the given string value.
+    """
+    if string_value is not None:
+        import binascii
+        return str(binascii.crc32(string_value.upper().encode('utf8')))
+    return None
+
+
+def crc_changed(crc1: Optional[str], crc2: Optional[str]) -> bool:
+    """
+    Returns whether the two crc values are not equal.
+
+    :param crc1: crc value
+    :param crc2: another crc value
+    :return: True/False -- if they are non-matching
+    """
+    if crc1 is None:
+        if crc2 is not None:
+            return True
+    elif crc1 != crc2:
+        return True
+    return False
+
+
+def crc_compare_changed(crc: Optional[str], compare_string: Optional[str]) -> Tuple[Optional[str], bool, bool]:
+    """
+    Combines functionality of crc_changed and crc_calc
+
+    :param crc: the crc value to compare with the given non-crc string_value
+    :param compare_string: will be converted to a crc value and compared to the given crc
+    :return: a tuple containing the crc value for the compare_string, and whether it evaluated as not equal
+    """
+    crc2 = crc_calc(compare_string)
+    changed = crc_changed(crc, crc2)
+    return crc2, changed, crc is not None
 
 
 class ExUtil:  # Django Exception Utilities
@@ -258,6 +300,83 @@ class ModelUtil:
                     updated_vals[key] = 0
                 field.clear()
         return updated_vals
+
+    @staticmethod
+    def make_printable(in_string: str, include_breaks: bool = True) -> str:
+        """
+        Converts any string to ONLY printable characters (and line breaks)
+        """
+        import sys
+        if type(in_string) is not str:
+            return ''
+        # line breaks are not expressly "printable", but they can be included if necessary
+        line_breaks = {"\n", "\r"} if include_breaks else set([])  # line breaks can be included in the string
+        # sys.maxunicode is the max character code that is available
+        # essentially, we are mapping every character for deletion that cannot be printed
+        unprintable = {i: None for i in range(0, sys.maxunicode + 1)
+                       if not chr(i).isprintable() and chr(i) not in line_breaks}
+        return in_string.translate(unprintable)
+
+    @staticmethod
+    def random_delay(sec_one: int = 0, sec_two: int = 3):
+        from random import randint
+        from time import sleep
+        sleep_time = randint(sec_one, sec_two)
+        print(f"Sleeping {sleep_time} seconds...")
+        sleep(sleep_time)
+
+    @classmethod
+    def find_ref_fields_from_objs(cls, source_obj, ref_obj):
+        """
+        Takes two model objects and returns fields that reference the second object/class
+        :param source_obj: first model object
+        :param ref_obj: the referenced model object
+        :return: list of fields that make a reference to the second model
+        """
+        return cls.find_ref_fields(source_obj._meta, ref_obj._meta)
+
+    @staticmethod
+    def find_ref_fields(source_meta, ref_meta):
+        """
+        Return a list of foreign key fields for the model
+        """
+        field_list = []
+        ref_model = ref_meta.model
+        for field in source_meta.fields:
+            if field.get_internal_type() == 'ForeignKey':
+                if field.remote_field.model.__name__ == ref_model.__name__:
+                    if field.name not in field_list:
+                        field_list.append(field.name)
+        return field_list
+
+    @staticmethod
+    def copy_attribute(dest_obj, source_obj, attr_dest, attr_source=None):
+        """
+        Used to copy attribute value from the source object to the destination
+
+        :param dest_obj: The object the given attribute value will be copied to
+        :param source_obj: The object the given attribute value will be copied from
+        :param attr_dest: The destination (default source) field attribute
+        :param attr_source: The source field attribute (if different from destination)
+        """
+        if not attr_source:
+            attr_source = attr_dest
+        if hasattr(dest_obj, attr_dest) and hasattr(source_obj, attr_source):
+            setattr(dest_obj, attr_dest, getattr(source_obj, attr_source))
+        else:
+            if not hasattr(dest_obj, attr_dest):
+                raise Exception("Attribute not found for destination object during copy: {0}".format(attr_dest))
+            else:
+                raise Exception("Attribute not found for source object during copy: {0}".format(attr_source))
+
+    @classmethod
+    def copy_attributes(cls, dest_obj, source_obj, attr_dest_list: list, attr_source_list: list = None):
+        if not attr_source_list:
+            attr_source_list = attr_dest_list.copy()
+        if len(attr_dest_list) != len(attr_source_list):
+            raise Exception("Source and destination attribute lengths do not match!")
+        for i in range(0, len(attr_dest_list)):
+            cls.copy_attribute(dest_obj, source_obj, attr_dest_list[i], attr_source_list[i])
 
 
 class DateUtil:

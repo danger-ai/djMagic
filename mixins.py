@@ -17,22 +17,6 @@ class BaseModel(models.Model):
 
     objects: models.Manager
 
-    @staticmethod
-    def make_printable(in_string: str, include_breaks: bool = True) -> str:
-        """
-        Converts any string to ONLY printable characters (and line breaks)
-        """
-        import sys
-        if type(in_string) is not str:
-            return ''
-        # line breaks are not expressly "printable", but they can be included if necessary
-        line_breaks = {"\n", "\r"} if include_breaks else set([])  # line breaks can be included in the string
-        # sys.maxunicode is the max character code that is available
-        # essentially, we are mapping every character for deletion that cannot be printed
-        unprintable = {i: None for i in range(0, sys.maxunicode + 1)
-                       if not chr(i).isprintable() and chr(i) not in line_breaks}
-        return in_string.translate(unprintable)
-
     def to_json(self):
         """
         Represent the current model object as a JSON object (fixed)
@@ -57,14 +41,6 @@ class BaseModel(models.Model):
         :return: Unique ID using the app, model name, and object ID
         """
         return "{0}.{1}".format(self.model_identity(), getattr(self, 'id', '0'))
-
-    @staticmethod
-    def random_delay(sec_one: int = 0, sec_two: int = 3):
-        from random import randint
-        from time import sleep
-        sleep_time = randint(sec_one, sec_two)
-        print(f"Sleeping {sleep_time} seconds...")
-        sleep(sleep_time)
 
     def get_custom_uid(self, name):
         """
@@ -235,20 +211,6 @@ class BaseModel(models.Model):
         print(f"{len(used)} records are in use!")
         return used
 
-    @classmethod
-    def find_ref_fields(cls, ref_instance):
-        """
-        Return a list of foreign key fields for the model
-        """
-        field_list = []
-        this_model = ref_instance._meta.model
-        for field in cls._meta.fields:
-            if field.get_internal_type() == 'ForeignKey':
-                if field.remote_field.model.__name__ == this_model.__name__:
-                    if field.name not in field_list:
-                        field_list.append(field.name)
-        return field_list
-
     def can_i_be_deleted(self, current_usage_instance: Optional['BaseModel'] = None):
         """
         Check if this model instance can be deleted without leaving orphan references
@@ -275,6 +237,7 @@ class BaseModel(models.Model):
         Used to identify the foreign key usages of this particular record
         """
         from django.conf import settings
+        from utils import ModelUtil
         from django.apps import apps
         from django.db.models import Q
 
@@ -286,15 +249,9 @@ class BaseModel(models.Model):
                 for model in app_models:
                     if (exclude_self_reference and not model.__name__ == this_model.__name__) \
                             or not exclude_self_reference:
-                        fk_fields = []
-                        if hasattr(model, 'find_ref_fields'):
-                            fk_fields = model.find_ref_fields(self)
-                        else:
-                            for field in model._meta.fields:
-                                if field.get_internal_type() == 'ForeignKey':
-                                    if field.remote_field.model.__name__ == this_model.__name__:
-                                        if field.name not in fk_fields:
-                                            fk_fields.append(field.name)
+
+                        fk_fields = ModelUtil.find_ref_fields_from_objs(model, self)
+
                         if fk_fields:
                             q_filter = Q()
                             for field in fk_fields:
@@ -304,26 +261,6 @@ class BaseModel(models.Model):
                                 in_use_records[model] = [r.id for r in q]
 
         return in_use_records if in_use_records else None
-
-    @staticmethod
-    def copy_attribute(dest_obj, source_obj, attr_dest, attr_source=None):
-        """
-        Used to copy attribute value from the source object to the destination
-
-        :param dest_obj: The object the given attribute value will be copied to
-        :param source_obj: The object the given attribute value will be copied from
-        :param attr_dest: The destination (default source) field attribute
-        :param attr_source: The source field attribute (if different than destination)
-        """
-        if not attr_source:
-            attr_source = attr_dest
-        if hasattr(dest_obj, attr_dest) and hasattr(source_obj, attr_source):
-            setattr(dest_obj, attr_dest, getattr(source_obj, attr_source))
-        else:
-            if not hasattr(dest_obj, attr_dest):
-                raise Exception("Attribute not found for destination object during copy: {0}".format(attr_dest))
-            else:
-                raise Exception("Attribute not found for source object during copy: {0}".format(attr_source))
 
     @classmethod
     def get_fk_field_filters(cls, field_name: str, id_list):  # potential list field associated
@@ -337,142 +274,31 @@ class BaseModel(models.Model):
             filters["{0}_list__in".format(field_name)] = id_list
         return filters
 
-    @classmethod
-    def copy_attributes(cls, dest_obj, source_obj, attr_dest_list: list, attr_source_list: list = None):
-        if not attr_source_list:
-            attr_source_list = attr_dest_list.copy()
-        if len(attr_dest_list) != len(attr_source_list):
-            raise Exception("Source and destination attribute lengths do not match!")
-        for i in range(0, len(attr_dest_list)):
-            cls.copy_attribute(dest_obj, source_obj, attr_dest_list[i], attr_source_list[i])
-
     def copy_other_attribute(self, other_obj, attr, attr_other=None):
-        self.copy_attribute(self, other_obj, attr, attr_other)
-
-    def copy_other_attributes(self, other_obj, attr_list: list, attr_other_list: list = None):
-        self.copy_attributes(self, other_obj, attr_list, attr_other_list)
-
-    # @staticmethod
-    # def tracked_fields():
-    #     """
-    #     dict fields are the fields that will be serialized into a dictionary
-    #     these are the values that will be returned during basic data requests for this model
-    #     keep in mind that tracked_fields are currently the only fields that have their initial
-    #     state saved for change comparisons -- this does not apply to the model_update method
-    #     :return: Optional[list] of field names
-    #     """
-    #     return None  # ['id']
-    #
-    # @staticmethod
-    # def list_view_fields():
-    #     """
-    #     return a dictionary list of fields that are meant to be displayed in an auto-generated admin list view
-    #     :return: Optional[list] of field names
-    #     """
-    #     return None  # [{"name": "", "attr": "", "export": True, "visible": False, url_gen='name', 'url', 'list'}]
-    #
-    # @staticmethod
-    # def list_view_exclude_filter(*args, **kwargs):
-    #     """
-    #     Applied to admin views.
-    #     """
-    #     return None
-    #
-    # @staticmethod
-    # def filter_fields():
-    #     """
-    #     return a dictionary list of fields that are meant to be searched while using a generic search
-    #     :return: Optional[list] of field names
-    #     """
-    #     return None  # [{'name': '', 'type': 'str'}]
-
-    # @classmethod
-    # def list_view_row(cls, fields, obj, html=True, toggle_identity=None):
-    #     """
-    #     Returns a list of field values for the object (used when generating list views)
-    #     :param fields:
-    #     :param obj:
-    #     :return:
-    #     """
-    #     from core.util import get_button, attrvalue, get_bool, parse_value_field
-    #     data_list = []
-    #     for field in fields:
-    #         if attrvalue(field, 'url_gen'):
-    #             if field['url_gen'] == 'url':
-    #                 display_id = str(obj.id).zfill(5)
-    #                 formatted_id = True
-    #                 extra_kwargs = {}
-    #                 if 'options' in field:
-    #                     options = field['options']
-    #                     if 'display_id' in options and hasattr(obj, options['display_id']):
-    #                         display_id = getattr(obj, options['display_id'])
-    #                         formatted_id = False
-    #                     if 'section' in options:
-    #                         extra_kwargs['custom_section'] = options['section']
-    #                     if 'page' in options:
-    #                         extra_kwargs['custom_page'] = options['page']
-    #                     if 'url_id' in options:
-    #                         extra_kwargs['url_id'] = options['url_id']
-    #
-    #                 data_list.append(get_button(obj.id, display_id, html, cls,
-    #                                             formatted_number=formatted_id,
-    #                                             toggle_identity=toggle_identity, **extra_kwargs))
-    #             else:
-    #                 data_list.append(None)
-    #         else:
-    #             if type(field['attr']) is not list:
-    #                 data_list.append(parse_value_field(obj, field['attr'], field, html))
-    #             else:
-    #                 value = ''
-    #                 for attr in field['attr']:
-    #                     attr_sep = "|" if 'attr_sep' not in field or \
-    #                                       type(field['attr_sep']) is not str else field['attr_sep']
-    #                     temp_val = parse_value_field(obj, attr, field, html)
-    #                     value += str(temp_val) if not value else f"{attr_sep}{str(temp_val)}"
-    #                 data_list.append(f'<div style="width: 100%; text-align: center;">{value}</div>')
-    #     return data_list
-
-    @staticmethod
-    def crc_calc(string_value: Optional[str]) -> Optional[str]:
         """
-        Calculates the CRC representation of the given string value.
-
-        :param string_value: any string or None value.
-        :return: CRC string representation of the given string value.
+        Copy an attribute from another object to the current instance
+        :param other_obj: the object from which to copy
+        :param attr: the attribute to compare on the current object
+        :param attr_other: specify if the other attribute has a different name
         """
-        if string_value is not None:
-            import binascii
-            return str(binascii.crc32(string_value.upper().encode('utf8')))
-        return None
+        from utils import ModelUtil
+        ModelUtil.copy_attribute(self, other_obj, attr, attr_other)
 
-    @staticmethod
-    def crc_changed(crc1: Optional[str], crc2: Optional[str]) -> bool:
+    def copy_other_attributes(self, other_obj, attrs: Union[list, dict]):
         """
-        Returns whether the two crc values are not equal.
+        Copy specified attributes from another object to the current instance
+        :param other_obj: the object from which to copy
+        :param attrs: can be a list of attributes, or a dictionary with {'this_attr': 'other_attr'} mappings
+        """
+        from utils import ModelUtil
+        kwargs = {}
+        if type(attrs) is list:
+            kwargs['attr_dest_list'] = attrs
+        elif type(attrs) is dict:
+            kwargs['attr_dest_list'] = attrs.keys()
+            kwargs['attr_source_list'] = attrs.values()
 
-        :param crc1: crc value
-        :param crc2: another crc value
-        :return: True/False -- if they are non-matching
-        """
-        if crc1 is None:
-            if crc2 is not None:
-                return True
-        elif crc1 != crc2:
-            return True
-        return False
-
-    @classmethod
-    def crc_compare_changed(cls, crc: Optional[str], compare_string: Optional[str]) -> Tuple[Optional[str], bool, bool]:
-        """
-        Combines functionality of crc_changed and crc_calc
-
-        :param crc: the crc value to compare with the given non-crc string_value
-        :param compare_string: will be converted to a crc value and compared to the given crc
-        :return: a tuple containing the crc value for the compare_string, and whether it evaluated as not equal
-        """
-        crc2 = cls.crc_calc(compare_string)
-        changed = cls.crc_changed(crc, crc2)
-        return crc2, changed, crc is not None
+        ModelUtil.copy_attributes(self, other_obj, **kwargs)
 
     @classmethod
     def by_xref(cls, source_obj, source_id, org_id=None):
